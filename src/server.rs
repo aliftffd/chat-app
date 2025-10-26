@@ -1,18 +1,17 @@
 use crate::message::{ChatMessage, MessageType};
-use serde_json::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Mutex};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast::error::RecvError;
 
 type SharedState = Arc<Mutex<HashMap<String, TcpStream>>>;
 
-pub Struct ChatServer{
+pub struct ChatServer{
     listener: TcpListener,
     state: SharedState,
-    sender: broadcast::Sender<String>;
+    sender: broadcast::Sender<String>,
 }
 
 impl ChatServer{
@@ -21,7 +20,7 @@ impl ChatServer{
         let state = Arc::new(Mutex::new(HashMap::new()));
         let (sender, _) = broadcast::channel(100);
 
-        Ok(self{
+        Ok(Self{
             listener,
             state,
             sender,
@@ -40,7 +39,7 @@ impl ChatServer{
 
             tokio::spawn(async move{
                 if let Err(e) = Self::handle_client(stream,state,sender,&mut receiver).await{
-                    eprinln!("❌ Client handler error: {}", e);
+                    eprintln!("❌ Client handler error: {}", e);
                 }
             });
         }
@@ -49,18 +48,19 @@ impl ChatServer{
     }
 
     async fn handle_client(
-        mut stream: TcpStream,
+        stream: TcpStream,
         state: SharedState,
         sender: broadcast::Sender<String>,
         receiver: &mut broadcast::Receiver<String>,
     ) -> std::io::Result<()> {
-        let (reader,mut writer) = stream.split();
+        let (reader, mut writer) = stream.into_split();
         let mut buf_reader = BufReader::new(reader);
         let mut line = String::new();
 
-        //Read user name
+        // Read user name
         writer.write_all(b"Enter Username : ").await?;
-        buf_reader.real_line(&mut line).await?;
+        writer.flush().await?;
+        buf_reader.read_line(&mut line).await?;
         let username = line.trim().to_string();
 
         if username.is_empty(){
@@ -68,99 +68,87 @@ impl ChatServer{
             return Ok(());
         }
 
-        // Add client state
-
-        {
-            let mut state_lock = state.lock().await;
-            state_lock.insert(username.clone(),stream);
-        }
-
-        // sent join notification
+        // Send join notification
         let join_msg = ChatMessage::new(
-            usernam.clone(),
-            format!("{} joint the chat!",username),
-            MessageType::Join;
-            );
+            username.clone(),
+            format!("{} joined the chat!", username),
+            MessageType::Join,
+        );
 
-        //Welcome message
+        let _ = sender.send(join_msg.to_json());
+
+        // Welcome message
         let welcome_msg = ChatMessage::new(
             "System".to_string(),
-            format!("Welcome to the chat,{}! Type 'quit' to exit",username),
-            MessageType::System;
-            );
+            format!("Welcome to the chat, {}! Type '/quit' to exit", username),
+            MessageType::System,
+        );
 
-        writer.write_all(format!("{}\n",welcome_msg.to_json()).as_byte()).await?;
+        writer.write_all(format!("{}\n", welcome_msg.to_json()).as_bytes()).await?;
+        writer.flush().await?;
 
-        let mut username_clone = username.clone();
+        let username_clone = username.clone();
         let sender_clone = sender.clone();
 
-        //spawn task reciver message from this client
-        //
-
-        if receive_handle = tokio::spawn(async move{
-            let (reader, _) = match TcpListener::peak(&mut stream){
-                Ok(_) => stream.split(),
-                Err(_) => return,
-            };
-
-            let buf_reader = BufReader::new(reader);
+        // Spawn task to receive messages from this client
+        let receive_handle = tokio::spawn(async move {
             let mut line = String::new();
 
-            loop{
+            loop {
                 line.clear();
-                match buf_reader.read_line(&mut line).await{
-                    Ok(0) => break, // connection lost 
+                match buf_reader.read_line(&mut line).await {
+                    Ok(0) => break, // connection closed
                     Ok(_) => {
                         let content = line.trim().to_string();
 
-                        if content == "/quit"{
+                        if content == "/quit" {
                             break;
                         }
 
-                        if !content.is_empty(){
+                        if !content.is_empty() {
                             let msg = ChatMessage::new(
                                 username_clone.clone(),
                                 content,
                                 MessageType::Text,
-                                );
+                            );
 
-                            let _ = sender_clone().send(msg.to_json());
+                            let _ = sender_clone.send(msg.to_json());
                         }
                     }
-                    Err(_) => break;
+                    Err(_) => break,
                 }
             }
 
-            // send leave notification
-
+            // Send leave notification
             let leave_msg = ChatMessage::new(
                 username_clone.clone(),
-                format!("{} left the chat!",username_clone),
+                format!("{} left the chat!", username_clone),
                 MessageType::Leave,
-                );
+            );
 
             let _ = sender_clone.send(leave_msg.to_json());
         });
 
-        loop{
-            match reciver.recv().await {
-                Ok (message) => {
-                    if let Ok(chat_msg) = ChatMessage::from_json(&message){
-                            // Dont send user's own message back to them
-                            if chat_msg.username != username{
-                                if let Err(_) = writer.write_all(format!("{}\n",message)).await{
-                                    break;
-                                }
+        // Broadcast messages to this client
+        loop {
+            match receiver.recv().await {
+                Ok(message) => {
+                    if let Ok(chat_msg) = ChatMessage::from_json(&message) {
+                        // Don't send user's own message back to them
+                        if chat_msg.username != username {
+                            if let Err(_) = writer.write_all(format!("{}\n", message).as_bytes()).await {
+                                break;
                             }
+                            let _ = writer.flush().await;
+                        }
                     }
                 }
-                Err(RecvError::Closed) => break;
-                Err(RecvError::Lagged(_)) => continue;
+                Err(RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => continue,
             }
         }
 
-        //cleanup
-
+        // Cleanup
         {
             let mut state_lock = state.lock().await;
             state_lock.remove(&username);
@@ -169,6 +157,6 @@ impl ChatServer{
         receive_handle.abort();
         println!("👋 Client disconnected: {}", username);
 
-        Ok(());
-   }
+        Ok(())
+    }
 }
