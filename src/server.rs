@@ -57,9 +57,7 @@ impl ChatServer{
         let mut buf_reader = BufReader::new(reader);
         let mut line = String::new();
 
-        // Read user name
-        writer.write_all(b"Enter Username : ").await?;
-        writer.flush().await?;
+        // Read username from client
         buf_reader.read_line(&mut line).await?;
         let username = line.trim().to_string();
 
@@ -67,6 +65,8 @@ impl ChatServer{
             writer.write_all(b"Username cannot be empty!\n").await?;
             return Ok(());
         }
+
+        println!("✅ User '{}' joined the chat", username);
 
         // Send join notification
         let join_msg = ChatMessage::new(
@@ -108,10 +108,11 @@ impl ChatServer{
                         if !content.is_empty() {
                             let msg = ChatMessage::new(
                                 username_clone.clone(),
-                                content,
+                                content.clone(),
                                 MessageType::Text,
                             );
 
+                            println!("📨 Message from {}: {}", username_clone, content);
                             let _ = sender_clone.send(msg.to_json());
                         }
                     }
@@ -126,6 +127,7 @@ impl ChatServer{
                 MessageType::Leave,
             );
 
+            println!("👋 User '{}' is leaving", username_clone);
             let _ = sender_clone.send(leave_msg.to_json());
         });
 

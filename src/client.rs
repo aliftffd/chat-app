@@ -19,6 +19,25 @@ impl ChatClient {
     pub async fn run(self) -> std::io::Result<()> {
         let (reader, mut writer) = self.stream.into_split();
         let mut buf_reader = BufReader::new(reader);
+        
+        // Get username from user
+        print!("Enter Username: ");
+        io::stdout().flush().unwrap();
+        
+        let stdin = std::io::stdin();
+        let mut username = String::new();
+        stdin.read_line(&mut username).unwrap();
+        let username = username.trim().to_string();
+        
+        if username.is_empty() {
+            println!("Username cannot be empty!");
+            return Ok(());
+        }
+        
+        // Send username to server
+        writer.write_all(format!("{}\n", username).as_bytes()).await?;
+        writer.flush().await?;
+        
         let (tx, mut rx) = mpsc::channel::<String>(100);
 
         // Spawn task for reading user input
@@ -27,9 +46,11 @@ impl ChatClient {
             let mut stdin_reader = BufReader::new(stdin);
             let mut line = String::new();
 
+            // Show initial prompt
+            print!("{}", "> ".green());
+            io::stdout().flush().unwrap();
+
             loop {
-                print!("{}", "> ".green());
-                io::stdout().flush().unwrap();
                 line.clear();
 
                 match stdin_reader.read_line(&mut line).await {
@@ -43,6 +64,9 @@ impl ChatClient {
                         if !content.is_empty() {
                             let _ = tx.send(content).await;
                         }
+                        // Show prompt for next message
+                        print!("{}", "> ".green());
+                        io::stdout().flush().unwrap();
                     }
                     Err(_) => break,
                 }
@@ -57,19 +81,25 @@ impl ChatClient {
                 line.clear();
                 match buf_reader.read_line(&mut line).await {
                     Ok(0) => {
-                        println!("{}", "🔌 Connection closed by server".red());
+                        println!("\n{}", "🔌 Connection closed by server".red());
                         break;
                     }
                     Ok(_) => {
                         let trimmed = line.trim();
                         if let Ok(chat_msg) = ChatMessage::from_json(trimmed) {
+                            // Clear current line and print message
+                            print!("\r\x1B[K"); // Clear line
                             Self::display_message(&chat_msg);
+                            // Re-print prompt
+                            print!("{}", "> ".green());
+                            io::stdout().flush().unwrap();
                         } else if !trimmed.is_empty() {
-                            println!("{}", trimmed);
+                            // Only show raw text if it's not JSON (for debugging)
+                            // Most messages should be parsed as ChatMessage
                         }
                     }
                     Err(e) => {
-                        eprintln!("❌ Error reading from server: {}", e);
+                        eprintln!("\n❌ Error reading from server: {}", e);
                         break;
                     }
                 }
