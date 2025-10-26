@@ -1,7 +1,7 @@
-use serde::{Deserialize,Serialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug,Serialize,Deserialize)]]
+#[derive(Debug, Serialize, Deserialize)]
 
 pub struct ChatMessage{
     pub id: Uuid,
@@ -9,10 +9,10 @@ pub struct ChatMessage{
     pub content: String,
     pub timestamp: u64,
     pub message_type: Message_type,
-};
+}
 
 
-#[derive(Debug,Serialize,Deserialize)]]
+#[derive(Debug,Serialize,Deserialize)]
 pub enum Message_type{
     Text,
     Join,
