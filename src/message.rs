@@ -1,5 +1,8 @@
+use std::fmt::Result;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::error::{ProtocolError,Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -27,17 +30,25 @@ impl ChatMessage {
             content,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
             message_type,
         }
     }
 
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap()
-    }
+   pub fn to_json(&self) -> Result<String> {
+       serde_json::to_string(self).map_err(|e| {
+           ProtocolError::SerializationFailed {
+               message_type: format!("{:?}", self.message_type),
+               source: e,
+           }
+           .into()
+       })
+   }
 
-    pub fn from_json(data: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(data)
-    }
+   pub fn to_json(data: &str) -> Result<Self> {
+       serde_json::from_str(data).map_err(|e| {
+           ProtocolError::DeserializationFailed { source: e }.into()
+       })
+   }
 }
