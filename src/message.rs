@@ -1,8 +1,7 @@
-use std::fmt::Result;
-
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use crate::error::{ProtocolError,Result};
+use crate::device::DeviceInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -12,14 +11,17 @@ pub struct ChatMessage {
     pub content: String,
     pub timestamp: u64,
     pub message_type: MessageType,
+    pub device: Option<DeviceInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MessageType {
     Text,
     Join,
     Leave,
     System,
+    DeviceRegistration,
+    DeviceList,
 }
 
 impl ChatMessage {
@@ -33,6 +35,7 @@ impl ChatMessage {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             message_type,
+            device: None,
         }
     }
 
@@ -46,9 +49,14 @@ impl ChatMessage {
        })
    }
 
-   pub fn to_json(data: &str) -> Result<Self> {
+   pub fn from_json(data: &str) -> Result<Self> {
        serde_json::from_str(data).map_err(|e| {
            ProtocolError::DeserializationFailed { source: e }.into()
        })
+   }
+
+   pub fn with_device(mut self, device: DeviceInfo) -> Self {
+       self.device = Some(device);
+       self
    }
 }

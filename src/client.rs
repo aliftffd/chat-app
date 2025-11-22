@@ -1,5 +1,6 @@
 use crate::message::ChatMessage;
 use crate::error::{NetworkError, Result};
+use crate::device::DeviceInfo;  // NEW
 use colored::*;
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -25,17 +26,18 @@ impl ChatClient {
     }
 
     fn show_help() {
-        println!();
-        println!("{}", "╔════════════════════════════════════════════════════════╗".cyan());
-        println!("{}", "║                  Available Commands                    ║".cyan());
-        println!("{}", "╚════════════════════════════════════════════════════════╝".cyan());
-        println!();
-        println!("  {}  - Show this help message", "/help".yellow());
-        println!("  {}  - Clear the screen", "/clear".yellow());
-        println!("  {}  - Exit the chat", "/quit".yellow());
-        println!();
-        println!("{}", "  Tip: Messages are sent when you press Enter".dimmed());
-        println!();
+       println!();
+       println!("{}", "╔════════════════════════════════════════════════════════╗".cyan());
+       println!("{}", "║                  Available Commands                    ║".cyan());
+       println!("{}", "╚════════════════════════════════════════════════════════╝".cyan());
+       println!();
+       println!("  {}  - Show this help message", "/help".yellow());
+       println!("  {}  - Clear the screen", "/clear".yellow());
+       println!("  {}  - List all connected devices", "/devices".yellow());
+       println!("  {}  - Exit the chat", "/quit".yellow());
+       println!();
+       println!("{}", "  Tip: Messages show which device they're from".dimmed());
+       println!();
     }
 
     fn clear_screen(){
@@ -71,15 +73,30 @@ impl ChatClient {
             anyhow::bail!("Username cannot be empty!");
         }
 
+        self.run_with_username(username).await
+    }
+
+    pub async fn run_with_username(self, username: String) -> anyhow::Result<()> {
+        // Show banner
+        Self::show_banner();
+
         let (reader, mut writer) = self.stream.into_split();
         let mut buf_reader = BufReader::new(reader);
 
         // Send username to server
-        writer.write_all(format!("{}\n", username).as_bytes()).await
-            .context("Failed to send username to server")?;
+       writer.write_all(format!("{}\n", username).as_bytes()).await
+           .context("Failed to send username to server")?;
+       writer.flush().await
+           .context("Failed to flush after sending username")?;
+       //senmd device info to server
+       let device_info = DeviceInfo::new(None);
+       let device_json = serde_json::to_string(&device_info)
+           .context("Failed to serialize device info")?;
+        writer.write_all(format!("{}\n", device_json).as_bytes()).await
+            .context("Failed to send device info to server")?;
         writer.flush().await
-            .context("Failed to flush after sending username")?;
-
+            .context("Failed to flush after sending device info")?;
+        info!("Device registered: {} {} ({})",device_info.device_id, device_info.os, device_info.type_str());
         let (tx, mut rx) = mpsc::channel::<String>(100);
 
         // Spawn task for reading user input
@@ -227,28 +244,38 @@ impl ChatClient {
             .map(|dt| dt.format("%H:%M:%S").to_string())
             .unwrap_or_else(|| "??:??:??".to_string());
 
+        // Device info display
+        let device_str = if let Some(ref dev) = msg.device {
+            format!("[{}] ", dev.device_id.cyan())
+        } else {
+            String::new()
+        };
+
         match msg.message_type {
             crate::message::MessageType::Text => {
                 println!(
-                    "[{}] {}: {}",
+                    "[{}] {}{}: {}",
                     timestamp.dimmed(),
+                    device_str,
                     msg.username.blue(),
                     msg.content
                 );
             }
             crate::message::MessageType::Join => {
                 println!(
-                    "[{}] {} {}",
+                    "[{}] {} {}{}",
                     timestamp.dimmed(),
                     "➡️".green(),
+                    device_str,
                     msg.content.yellow()
                 );
             }
             crate::message::MessageType::Leave => {
                 println!(
-                    "[{}] {} {}",
+                    "[{}] {} {}{}",
                     timestamp.dimmed(),
                     "⬅️".red(),
+                    device_str,
                     msg.content.yellow()
                 );
             }
@@ -258,6 +285,15 @@ impl ChatClient {
                     timestamp.dimmed(),
                     "⚡".cyan(),
                     msg.content.cyan()
+                );
+            }
+            _ => {
+                // Handle other message types
+                println!(
+                    "[{}] {}{}",
+                    timestamp.dimmed(),
+                    device_str,
+                    msg.content
                 );
             }
         }
@@ -285,6 +321,7 @@ impl ChatClient {
 
     /// Run with automatic reconnection on disconnect
     pub async fn run_with_auto_reconnect(addr: String, username: String) -> anyhow::Result<()> {
+        Self::show_banner();
         loop {
             info!("Attempting to connect to {}...", addr);
 

@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error,Debug)]
-
+#[allow(dead_code)]
 pub enum AppError {
     #[error("Network error: {0}")]
     Network(#[from] NetworkError),
@@ -17,9 +17,13 @@ pub enum AppError {
 
     #[error("ID error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
 }
 
 #[derive(Error,Debug)]
+#[allow(dead_code)]
 pub enum NetworkError{
     #[error("Connection refused to {address}")]
     ConnectionRefused { address: String },
@@ -33,8 +37,9 @@ pub enum NetworkError{
         timeout_secs: u64,
     },
 
-    #[error({"Server unreachable at {address}: {cause}"})]
-    ServerUnreachable { address: String, cause: String},
+        #[error("Server unreachable at {address}: {cause}")]
+
+        ServerUnreachable { address: String, cause: String },
     
     #[error("Failed to bind to address {address}: {source}")]
     BindFailed{
@@ -45,6 +50,7 @@ pub enum NetworkError{
 }
 
 #[derive(Error,Debug)]
+#[allow(dead_code)]
 pub enum ProtocolError {
     #[error("Failed to serialize message of type '{message_type}': {source}")]
     SerializationFailed {
@@ -52,7 +58,7 @@ pub enum ProtocolError {
         source: serde_json::Error,
     },
 
-    #[error("Failed to deserialize message: {source")]
+    #[error("Failed to deserialize message: {source}")]
     DeserializationFailed {source: serde_json::Error},
 
     #[error("Invalid message: {reason}")]
@@ -64,6 +70,7 @@ pub enum ProtocolError {
 }
 
 #[derive(Error,Debug)]
+#[allow(dead_code)]
 pub enum CommandError {
     #[error("Invalid command syntax: '{command}' - {reason}")]
     InvalidSyntax { command: String, reason: String },
@@ -82,6 +89,7 @@ pub enum CommandError {
 }
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum SystemError {
     #[error("GPU not available or nvidia-smi not found")]
     GpuNotAvailable,
@@ -107,6 +115,7 @@ pub enum SystemError {
 pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Extension trait for adding context to errors
+#[allow(dead_code)]
 pub trait Context<T> {
     fn context(self, context: impl Into<String>) -> anyhow::Result<T>;
 }
