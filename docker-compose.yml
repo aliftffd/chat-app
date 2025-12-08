@@ -1,24 +1,42 @@
 version: '3.8'
+
 services:
-  app:
+  chat-server:
     build: .
+    container_name: chat-server
     ports:
       - "8080:8080"
-    environment:
-      - DATABASE_URL=postgres://user:password@db:5432/chat_app
-    depends_on:
-      - db
-
-  db:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=chat_app
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      # Persist SQLite database across container restarts
+      - chat-data:/data
+    environment:
+      - RUST_LOG=chat_app=info
+      - XDG_DATA_HOME=/data
+    networks:
+      - chat-network
+    restart: unless-stopped
+    command: ["server", "--address", "0.0.0.0:8080"]
+
+  # Optional: Example client (run with: docker-compose --profile client up)
+  chat-client:
+    build: .
+    container_name: chat-client
+    depends_on:
+      - chat-server
+    command: ["client", "--address", "chat-server:8080", "--auto-reconnect"]
+    environment:
+      - RUST_LOG=chat_app=info
+    networks:
+      - chat-network
+    stdin_open: true
+    tty: true
+    profiles:
+      - client
 
 volumes:
-  postgres_data:
+  chat-data:
+    driver: local
+
+networks:
+  chat-network:
+    driver: bridge

@@ -80,22 +80,6 @@ impl DeviceInfo {
             .unwrap_or(0)
     }
 
-    /// Update last seen timestamp
-    pub fn update_last_seen(&mut self) {
-        self.last_seen = Self::current_timestamp();
-    }
-
-    /// Get device type emoji
-    pub fn type_emoji(&self) -> &str {
-        match self.device_type {
-            DeviceType::Server => "🖥️",
-            DeviceType::Workstation => "💻",
-            DeviceType::Laptop => "💻",
-            DeviceType::Edge => "📱",
-            DeviceType::Unknown => "❓",
-        }
-    }
-
     /// Get status indicator
     pub fn status_indicator(&self) -> &str {
         match self.status {

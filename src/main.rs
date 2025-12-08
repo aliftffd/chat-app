@@ -5,6 +5,7 @@ mod error;
 mod retry;
 mod config;
 mod device;
+mod message_store;
 
 use config::Config;
 use clap::{command, Parser, Subcommand};

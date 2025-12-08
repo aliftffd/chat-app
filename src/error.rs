@@ -15,7 +15,7 @@ pub enum AppError {
     #[error("System error: {0}")]
     System(#[from] SystemError),
 
-    #[error("ID error: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
@@ -64,8 +64,8 @@ pub enum ProtocolError {
     #[error("Invalid message: {reason}")]
     InvalidMessage {reason: String},
 
-    #[error("Protocol version mistmatch: expected v{expected}, got v{got}")]
-    VerisonMismatch {expected: u32, got: u32},
+    #[error("Protocol version mismatch: expected v{expected}, got v{got}")]
+    VersionMismatch {expected: u32, got: u32},
 
 }
 

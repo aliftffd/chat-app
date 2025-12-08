@@ -1,6 +1,7 @@
 use crate::message::{ChatMessage, MessageType};
 use crate::error::{NetworkError, Result};
 use crate::device::DeviceInfo;
+use crate::message_store::MessageStore;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -10,12 +11,14 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::{info, warn, error, debug};
 use anyhow::Context;
 
+
 type SharedState = Arc<Mutex<HashMap<String, DeviceInfo>>>;
 
 pub struct ChatServer {
     listener: TcpListener,
     state: SharedState,
     sender: broadcast::Sender<String>,
+    message_store: Arc<MessageStore>,
 }
 
 impl ChatServer {
@@ -30,12 +33,23 @@ impl ChatServer {
         let state = Arc::new(Mutex::new(HashMap::new()));
         let (sender, _) = broadcast::channel(100);
 
-        info!("Server initialized on {}", addr);
+        let db_path = MessageStore::default_path();
+        let message_store = Arc::new(
+            MessageStore::new(db_path)
+                .map_err(|e| NetworkError::ServerUnreachable {
+                    address: addr.to_string(),
+                    cause: format!("Failed to initialize message store: {}",e)
+                })?
+            );
 
+        info!("Server initialized on {}", addr);
+        info!("Message store ready - {} messages in history",
+            message_store.count().unwrap_or(0));
         Ok(Self {
             listener,
             state,
             sender,
+            message_store,
         })
     }
 
@@ -53,9 +67,10 @@ impl ChatServer {
                     let state = self.state.clone();
                     let sender = self.sender.clone();
                     let mut receiver = sender.subscribe();
+                    let message_store = self.message_store.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(stream, state, sender, &mut receiver).await {
+                        if let Err(e) = Self::handle_client(stream, state, sender, &mut receiver,message_store).await {
                             error!("Client handler error: {}", e);
                         }
                     });
@@ -72,6 +87,7 @@ impl ChatServer {
         state: SharedState,
         sender: broadcast::Sender<String>,
         receiver: &mut broadcast::Receiver<String>,
+        message_store: Arc<MessageStore>,
     ) -> anyhow::Result<()> {
         let (reader, mut writer) = stream.into_split();
         let mut buf_reader = BufReader::new(reader);
@@ -105,6 +121,25 @@ impl ChatServer {
             let mut state_lock = state.lock().await;
             state_lock.insert(device_info.device_id.clone(), device_info.clone());
         }
+        // Send recent message history
+        if let Ok(recent_messages) = message_store.recent(50){
+            if !recent_messages.is_empty() {
+                info!("Sending {} recent messages to {}", recent_messages.len(), username);
+
+                // Send header
+                let history_header = "📜 Recent message history:\n".to_string();
+                writer.write_all(history_header.as_bytes()).await?;
+
+                // Send each message
+                for msg in recent_messages {
+                    if let Ok(json) = msg.to_json() {
+                        writer.write_all(format!("{}\n",json).as_bytes()).await?;
+                    }
+                }
+
+                writer.flush().await?;
+            }
+        }
 
         // Send join notification with device info
         let join_msg = ChatMessage::new(
@@ -113,6 +148,11 @@ impl ChatServer {
             MessageType::Join,
         )
         .with_device(device_info.clone());
+
+        // Store join message
+        if let Err(e) = message_store.store(&join_msg){
+            error!("Failed to store join message: {}",e)
+        }
 
         if let Ok(json) = join_msg.to_json() {
             let _ = sender.send(json);
@@ -134,6 +174,7 @@ impl ChatServer {
         let sender_clone = sender.clone();
         let device_id = device_info.device_id.clone();
         let device_info_clone = device_info.clone();
+        let message_store_clone = message_store.clone();
 
         // Spawn task to receive messages from this client
         let receive_handle = tokio::spawn(async move {
@@ -170,6 +211,30 @@ impl ChatServer {
                             continue;
                         }
 
+                        // Handle /history command
+                        if content.starts_with("/history"){
+                            let parts: Vec<&str> = content.split_whitespace().collect();
+                            let count = if parts.len() > 1 {
+                                parts[1].parse::<usize>().unwrap_or(20)
+                            } else {
+                                20
+                            };
+
+                            let msg = ChatMessage::new(
+                                username_clone.clone(),
+                                format!("/history {}", count),
+                                MessageType::System,
+                            )
+                            .with_device(device_info_clone.clone());
+
+                            if let Ok(json) = msg.to_json() {
+                                let _ = sender_clone.send(json);
+                            }
+                            continue;
+                        }
+
+
+
                         if !content.is_empty() {
                             let msg = ChatMessage::new(
                                 username_clone.clone(),
@@ -178,8 +243,13 @@ impl ChatServer {
                             )
                             .with_device(device_info_clone.clone());
 
+                            // Store the text message
+                            if let Err(e) = message_store_clone.store(&msg) {
+                                error!("Failed to store text message: {}", e);
+                            }
+
                             info!("📨 Message from {} [{}]: {}", username_clone, device_id, content);
-                            
+
                             if let Ok(json) = msg.to_json() {
                                 if let Err(e) = sender_clone.send(json) {
                                     error!("Failed to broadcast message: {}", e);
@@ -202,6 +272,11 @@ impl ChatServer {
             )
             .with_device(device_info_clone.clone());
 
+
+            // Store leave message
+            if let Err(e) = message_store_clone.store(&leave_msg){
+                error!("Failed to store leave message: {}",e)
+            }
             info!("👋 User '{}' [{}] is leaving", username_clone, device_id);
             
             if let Ok(json) = leave_msg.to_json() {
@@ -234,6 +309,36 @@ impl ChatServer {
                                 break;
                             }
                             let _ = writer.flush().await;
+                            continue;
+                        }
+                        
+                        // Handle /history command 
+                        if chat_msg.content.starts_with("/history")
+                            && chat_msg.message_type == MessageType::System
+                            && chat_msg.username == username {
+                                let parts: Vec<&str> = chat_msg.content.split_whitespace().collect();
+                                let count = if parts.len() > 1{
+                                    parts[1].parse::<usize>().unwrap_or(20)
+                                } else {
+                                    20
+                                };
+
+                            if let Ok(history) = message_store.recent(count) {
+                                let history_msg = format!("\n📜 Last {} messages:\n", count);
+                                if let Err(_) = writer.write_all(history_msg.as_bytes()).await {
+                                    break;
+                                }
+
+                                for msg in history {
+                                    if let Ok(json) = msg.to_json() {
+                                        if let Err(_) = writer.write_all(format!("{}\n", json).as_bytes()).await {
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                let _ = writer.flush().await;
+                            }
                             continue;
                         }
 

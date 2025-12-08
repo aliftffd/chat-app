@@ -26,18 +26,19 @@ impl ChatClient {
     }
 
     fn show_help() {
-       println!();
-       println!("{}", "╔════════════════════════════════════════════════════════╗".cyan());
-       println!("{}", "║                  Available Commands                    ║".cyan());
-       println!("{}", "╚════════════════════════════════════════════════════════╝".cyan());
-       println!();
-       println!("  {}  - Show this help message", "/help".yellow());
-       println!("  {}  - Clear the screen", "/clear".yellow());
-       println!("  {}  - List all connected devices", "/devices".yellow());
-       println!("  {}  - Exit the chat", "/quit".yellow());
-       println!();
-       println!("{}", "  Tip: Messages show which device they're from".dimmed());
-       println!();
+        println!();
+        println!("{}", "╔════════════════════════════════════════════════════════╗".cyan());
+        println!("{}", "║                  Available Commands                    ║".cyan());
+        println!("{}", "╚════════════════════════════════════════════════════════╝".cyan());
+        println!();
+        println!("  {}  - Show this help message", "/help".yellow());
+        println!("  {}  - Clear the screen", "/clear".yellow());
+        println!("  {}  - List all connected devices", "/devices".yellow());
+        println!("  {}  - Show last N messages (default: 20)", "/history [N]".yellow());
+        println!("  {}  - Exit the chat", "/quit".yellow());
+        println!();
+        println!("{}", "  Tip: Recent messages are shown when you connect".dimmed());
+        println!();
     }
 
     fn clear_screen(){
@@ -58,23 +59,6 @@ impl ChatClient {
         Ok(Self { stream })
     }
 
-    pub async fn run(self) -> anyhow::Result<()> {
-            // Show banner
-            Self::show_banner();
-        // Get username from user
-        print!("Enter Username: ");
-        io::stdout().flush()
-            .context("Failed to flush stdout")?;
-
-        let username = self.get_username()
-            .context("Failed to read username")?;
-
-        if username.is_empty() {
-            anyhow::bail!("Username cannot be empty!");
-        }
-
-        self.run_with_username(username).await
-    }
 
     pub async fn run_with_username(self, username: String) -> anyhow::Result<()> {
         // Show banner
@@ -227,13 +211,6 @@ impl ChatClient {
         Ok(())
     }
 
-    fn get_username(&self) -> io::Result<String> {
-        let stdin = std::io::stdin();
-        let mut username = String::new();
-        stdin.read_line(&mut username)?;
-        Ok(username.trim().to_string())
-    }
-
     fn show_prompt() -> io::Result<()> {
         print!("{}", "> ".green());
         io::stdout().flush()
@@ -361,6 +338,16 @@ impl ChatClient {
             .context("Failed to send username to server")?;
         writer.flush().await
             .context("Failed to flush after sending username")?;
+
+        // Send device info to server
+        let device_info = DeviceInfo::new(None);
+        let device_json = serde_json::to_string(&device_info)
+            .context("Failed to serialize device info")?;
+        writer.write_all(format!("{}\n", device_json).as_bytes()).await
+            .context("Failed to send device info to server")?;
+        writer.flush().await
+            .context("Failed to flush after sending device info")?;
+        info!("Device registered: {} {} ({})", device_info.device_id, device_info.os, device_info.type_str());
 
         let (tx, mut rx) = mpsc::channel::<String>(100);
         
