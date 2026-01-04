@@ -1,16 +1,15 @@
-use crate::message::{ChatMessage, MessageType};
-use crate::error::{NetworkError, Result};
 use crate::device::DeviceInfo;
+use crate::error::{NetworkError, Result};
+use crate::message::{ChatMessage, MessageType};
 use crate::message_store::MessageStore;
+use anyhow::Context;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{info, warn, error, debug};
-use anyhow::Context;
-
+use tokio::sync::{broadcast, Mutex};
+use tracing::{debug, error, info, warn};
 
 type SharedState = Arc<Mutex<HashMap<String, DeviceInfo>>>;
 
@@ -23,28 +22,30 @@ pub struct ChatServer {
 
 impl ChatServer {
     pub async fn new(addr: &str) -> Result<Self> {
-        let listener = TcpListener::bind(addr).await.map_err(|e| {
-            NetworkError::BindFailed {
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|e| NetworkError::BindFailed {
                 address: addr.to_string(),
                 source: e,
-            }
-        })?;
+            })?;
 
         let state = Arc::new(Mutex::new(HashMap::new()));
         let (sender, _) = broadcast::channel(100);
 
         let db_path = MessageStore::default_path();
-        let message_store = Arc::new(
-            MessageStore::new(db_path)
-                .map_err(|e| NetworkError::ServerUnreachable {
+        let message_store =
+            Arc::new(
+                MessageStore::new(db_path).map_err(|e| NetworkError::ServerUnreachable {
                     address: addr.to_string(),
-                    cause: format!("Failed to initialize message store: {}",e)
-                })?
+                    cause: format!("Failed to initialize message store: {}", e),
+                })?,
             );
 
         info!("Server initialized on {}", addr);
-        info!("Message store ready - {} messages in history",
-            message_store.count().unwrap_or(0));
+        info!(
+            "Message store ready - {} messages in history",
+            message_store.count().unwrap_or(0)
+        );
         Ok(Self {
             listener,
             state,
@@ -54,9 +55,11 @@ impl ChatServer {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let local_addr = self.listener.local_addr()
+        let local_addr = self
+            .listener
+            .local_addr()
             .context("Failed to get local address")?;
-        
+
         info!("🚀 Server running on {}", local_addr);
 
         loop {
@@ -70,7 +73,10 @@ impl ChatServer {
                     let message_store = self.message_store.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(stream, state, sender, &mut receiver,message_store).await {
+                        if let Err(e) =
+                            Self::handle_client(stream, state, sender, &mut receiver, message_store)
+                                .await
+                        {
                             error!("Client handler error: {}", e);
                         }
                     });
@@ -94,7 +100,9 @@ impl ChatServer {
         let mut line = String::new();
 
         // Read username
-        buf_reader.read_line(&mut line).await
+        buf_reader
+            .read_line(&mut line)
+            .await
             .context("Failed to read username")?;
         let username = line.trim().to_string();
 
@@ -105,15 +113,20 @@ impl ChatServer {
 
         // Read device info
         line.clear();
-        buf_reader.read_line(&mut line).await
+        buf_reader
+            .read_line(&mut line)
+            .await
             .context("Failed to read device info")?;
-        
-        let device_info: DeviceInfo = serde_json::from_str(line.trim())
-            .unwrap_or_else(|_| DeviceInfo::new(None));
+
+        let device_info: DeviceInfo =
+            serde_json::from_str(line.trim()).unwrap_or_else(|_| DeviceInfo::new(None));
 
         info!(
             "✅ User '{}' joined from device: {} {} ({})",
-            username, device_info.device_id, device_info.os, device_info.type_str()
+            username,
+            device_info.device_id,
+            device_info.os,
+            device_info.type_str()
         );
 
         // Register device
@@ -122,9 +135,13 @@ impl ChatServer {
             state_lock.insert(device_info.device_id.clone(), device_info.clone());
         }
         // Send recent message history
-        if let Ok(recent_messages) = message_store.recent(50){
+        if let Ok(recent_messages) = message_store.recent(50) {
             if !recent_messages.is_empty() {
-                info!("Sending {} recent messages to {}", recent_messages.len(), username);
+                info!(
+                    "Sending {} recent messages to {}",
+                    recent_messages.len(),
+                    username
+                );
 
                 // Send header
                 let history_header = "📜 Recent message history:\n".to_string();
@@ -133,7 +150,7 @@ impl ChatServer {
                 // Send each message
                 for msg in recent_messages {
                     if let Ok(json) = msg.to_json() {
-                        writer.write_all(format!("{}\n",json).as_bytes()).await?;
+                        writer.write_all(format!("{}\n", json).as_bytes()).await?;
                     }
                 }
 
@@ -150,8 +167,8 @@ impl ChatServer {
         .with_device(device_info.clone());
 
         // Store join message
-        if let Err(e) = message_store.store(&join_msg){
-            error!("Failed to store join message: {}",e)
+        if let Err(e) = message_store.store(&join_msg) {
+            error!("Failed to store join message: {}", e)
         }
 
         if let Ok(json) = join_msg.to_json() {
@@ -212,7 +229,7 @@ impl ChatServer {
                         }
 
                         // Handle /history command
-                        if content.starts_with("/history"){
+                        if content.starts_with("/history") {
                             let parts: Vec<&str> = content.split_whitespace().collect();
                             let count = if parts.len() > 1 {
                                 parts[1].parse::<usize>().unwrap_or(20)
@@ -233,8 +250,6 @@ impl ChatServer {
                             continue;
                         }
 
-
-
                         if !content.is_empty() {
                             let msg = ChatMessage::new(
                                 username_clone.clone(),
@@ -248,7 +263,10 @@ impl ChatServer {
                                 error!("Failed to store text message: {}", e);
                             }
 
-                            info!("📨 Message from {} [{}]: {}", username_clone, device_id, content);
+                            info!(
+                                "📨 Message from {} [{}]: {}",
+                                username_clone, device_id, content
+                            );
 
                             if let Ok(json) = msg.to_json() {
                                 if let Err(e) = sender_clone.send(json) {
@@ -272,13 +290,12 @@ impl ChatServer {
             )
             .with_device(device_info_clone.clone());
 
-
             // Store leave message
-            if let Err(e) = message_store_clone.store(&leave_msg){
-                error!("Failed to store leave message: {}",e)
+            if let Err(e) = message_store_clone.store(&leave_msg) {
+                error!("Failed to store leave message: {}", e)
             }
             info!("👋 User '{}' [{}] is leaving", username_clone, device_id);
-            
+
             if let Ok(json) = leave_msg.to_json() {
                 let _ = sender_clone.send(json);
             }
@@ -290,38 +307,39 @@ impl ChatServer {
                 Ok(message) => {
                     if let Ok(chat_msg) = ChatMessage::from_json(&message) {
                         // Handle /devices command
-                        if chat_msg.content == "/devices" 
-                            && chat_msg.message_type == MessageType::System 
-                            && chat_msg.username == username {
+                        if chat_msg.content == "/devices"
+                            && chat_msg.message_type == MessageType::System
+                            && chat_msg.username == username
+                        {
                             // Send device list to this client only
                             let state_lock = state.lock().await;
-                            let device_list: Vec<String> = state_lock
-                                .values()
-                                .map(|d| format!("{}", d))
-                                .collect();
-                            
-                            let devices_msg = format!("\n📱 Connected Devices ({}):\n{}\n",
+                            let device_list: Vec<String> =
+                                state_lock.values().map(|d| format!("{}", d)).collect();
+
+                            let devices_msg = format!(
+                                "\n📱 Connected Devices ({}):\n{}\n",
                                 device_list.len(),
                                 device_list.join("\n")
                             );
-                            
+
                             if let Err(_) = writer.write_all(devices_msg.as_bytes()).await {
                                 break;
                             }
                             let _ = writer.flush().await;
                             continue;
                         }
-                        
-                        // Handle /history command 
+
+                        // Handle /history command
                         if chat_msg.content.starts_with("/history")
                             && chat_msg.message_type == MessageType::System
-                            && chat_msg.username == username {
-                                let parts: Vec<&str> = chat_msg.content.split_whitespace().collect();
-                                let count = if parts.len() > 1{
-                                    parts[1].parse::<usize>().unwrap_or(20)
-                                } else {
-                                    20
-                                };
+                            && chat_msg.username == username
+                        {
+                            let parts: Vec<&str> = chat_msg.content.split_whitespace().collect();
+                            let count = if parts.len() > 1 {
+                                parts[1].parse::<usize>().unwrap_or(20)
+                            } else {
+                                20
+                            };
 
                             if let Ok(history) = message_store.recent(count) {
                                 let history_msg = format!("\n📜 Last {} messages:\n", count);
@@ -331,7 +349,9 @@ impl ChatServer {
 
                                 for msg in history {
                                     if let Ok(json) = msg.to_json() {
-                                        if let Err(_) = writer.write_all(format!("{}\n", json).as_bytes()).await {
+                                        if let Err(_) =
+                                            writer.write_all(format!("{}\n", json).as_bytes()).await
+                                        {
                                             break;
                                         }
                                     }
@@ -344,7 +364,9 @@ impl ChatServer {
 
                         // Don't send user's own message back to them
                         if chat_msg.username != username {
-                            if let Err(_) = writer.write_all(format!("{}\n", message).as_bytes()).await {
+                            if let Err(_) =
+                                writer.write_all(format!("{}\n", message).as_bytes()).await
+                            {
                                 break;
                             }
                             let _ = writer.flush().await;
@@ -369,7 +391,10 @@ impl ChatServer {
         }
 
         receive_handle.abort();
-        info!("👋 Client disconnected: {} [{}]", username, device_info.device_id);
+        info!(
+            "👋 Client disconnected: {} [{}]",
+            username, device_info.device_id
+        );
 
         Ok(())
     }

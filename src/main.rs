@@ -1,16 +1,16 @@
 mod client;
-mod message;
-mod server;
-mod error;
-mod retry;
 mod config;
 mod device;
+mod error;
+mod message;
 mod message_store;
+mod retry;
+mod server;
 
-use config::Config;
 use clap::{command, Parser, Subcommand};
-use tracing_subscriber;
+use config::Config;
 use std::io::Write;
+use tracing_subscriber;
 
 #[derive(Parser)]
 #[command(name = "terminal-chat")]
@@ -49,9 +49,9 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into())
-            )
-            .init();
+                .add_directive(tracing::Level::INFO.into()),
+        )
+        .init();
     // load config
     let config = Config::load().unwrap_or_default();
     let cli = Cli::parse();
